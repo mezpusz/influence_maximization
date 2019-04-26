@@ -10,8 +10,10 @@
 #include <map>
 #include <deque>
 #include <iostream>
+#include <queue>
 
-#define SIM_COUNT 1
+#define SIM_COUNT 10000
+#define P 0.9f
 
 inline double randp()
 {
@@ -22,12 +24,23 @@ struct node {
     uint32_t id;
     std::vector<node*> neighbors;
     bool active = false;
-    bool temp_active = false;
-    double marg_gain;
+    double mg1 = 0.0f;
+    double mg2 = 0.0f;
+    int flag = 0;
+    node* prev_best = nullptr;
 };
 
+class marg_gain_compare {
+public:
+    bool operator()(const node* const lhs, const node* const rhs) const {
+        return lhs->mg1 < rhs->mg1;
+    }
+};
+
+using marg_queue = std::priority_queue<node*, std::vector<node*>, marg_gain_compare>;
+
 std::map<uint32_t, std::vector<uint32_t>> parse(const std::string& filename) {
-    std::cout << __FUNCTION__ << std::endl;
+    //std::cout << __FUNCTION__ << std::endl;
     std::ifstream in(filename);
     std::map<uint32_t, std::vector<uint32_t>> ne_pairs;
 
@@ -60,7 +73,7 @@ std::map<uint32_t, std::vector<uint32_t>> parse(const std::string& filename) {
 }
 
 std::vector<node> create_nodes(std::map<uint32_t, std::vector<uint32_t>> ne_pairs) {
-    std::cout << __FUNCTION__ << std::endl;
+    //std::cout << __FUNCTION__ << std::endl;
     std::vector<node> nodes(ne_pairs.size());
     auto ne_it = ne_pairs.begin();
     for (int i = 0; i < nodes.size(); i++) {
@@ -81,45 +94,49 @@ std::vector<node> create_nodes(std::map<uint32_t, std::vector<uint32_t>> ne_pair
     return nodes;
 }
 
-void simulate(node* seed, std::vector<node>& nodes) {
-    std::cout << __FUNCTION__ << std::endl;
-    uint64_t gain_sum = 1;
-    for (int i = 0; i < SIM_COUNT; i++) {
-        for (auto& n : nodes) {
-            if (!n.active) {
-                n.temp_active = false;
-            }
-        }
-        seed->temp_active = true;
-        std::deque<node*> q;
-        q.push_back(seed);
-        while (!q.empty()) {
-            auto curr = q.front();
-            q.pop_front();
+int bfs(std::vector<node*> s) {
+    //std::cout << __FUNCTION__ << std::endl;
+    uint64_t covered_nodes = s.size();
+    std::deque<node*> q;
+    for (auto& n : s) {
+        n->active = true;
+        q.push_back(n);
+    }
+    while (!q.empty()) {
+        auto curr = q.front();
+        q.pop_front();
 
-            for (auto& n : curr->neighbors) {
-                if (n->active || n->temp_active) {
-                    continue;
-                }
-                auto thres = randp(); // threshold
-                auto p = randp();
-                if (p >= thres) {
-                    n->temp_active = true;
-                    q.push_back(n);
-                    gain_sum++;
-                }
+        for (auto& n : curr->neighbors) {
+            if (n->active) {
+                continue;
+            }
+            auto p = randp();
+            if (p >= P) {
+                n->active = true;
+                q.push_back(n);
+                covered_nodes++;
             }
         }
     }
-    seed->marg_gain = gain_sum / (SIM_COUNT * 1.0f);
+    return covered_nodes;
 }
 
-void init_nodes(std::vector<node>& nodes) {
-    std::cout << __FUNCTION__ << std::endl;
-    for (auto& n : nodes) {
-        simulate(&n, nodes);
-        std::cout << n.id << " " << n.marg_gain << std::endl;
+double simulate(node* u, std::vector<node*> s, std::vector<node>& nodes) {
+    //std::cout << __FUNCTION__ << std::endl;
+    uint64_t gain_sum = s.size();
+    for (int i = 0; i < SIM_COUNT; i++) {
+        for (auto& n : nodes) {
+            n.active = false;
+        }
+        auto cs = bfs(s);
+        if (!u->active) {
+            std::vector<node*> us;
+            us.push_back(u);
+            auto cu = bfs(us);
+            gain_sum += cu - cs;
+        }
     }
+    return gain_sum / (SIM_COUNT * 1.0f);
 }
 
 int main(int argc, char* argv[]) {
@@ -128,7 +145,7 @@ int main(int argc, char* argv[]) {
     std::string it_str, infile_str, outfile_str;
     //size_t iter = opt.GetOption("--it", it_str) ? stoi(it_str) : 1;
     if (!opt.GetOption("-i", infile_str)) {
-        infile_str = "input.txt";
+        infile_str = "CA-HepTh.txt";
     }
     if (!opt.GetOption("-o", outfile_str)) {
         outfile_str = "output.txt";
@@ -136,7 +153,64 @@ int main(int argc, char* argv[]) {
 
     auto ne_pairs = parse(infile_str);
     auto nodes = create_nodes(ne_pairs);
-    init_nodes(nodes);
+
+    node* last_seed = nullptr;
+    node* cur_best = nullptr;
+    std::vector<node*> s;
+    marg_queue q;
+    double tev = 0.0f; // total expected value
+    int i = 0;
+    for (auto& n : nodes) {
+        std::vector<node*> sn;
+        n.mg1 = simulate(&n, sn, nodes);
+        n.prev_best = cur_best;
+        if (cur_best != nullptr) {
+            sn.push_back(cur_best);
+            n.mg2 = simulate(&n, sn, nodes);
+        } else {
+            n.mg2 = n.mg1;
+        }
+        q.push(&n);
+        if (cur_best == nullptr || n.mg1 > cur_best->mg1) {
+            cur_best = &n;
+        }
+        std::cout << ++i << " nodes ready" << std::endl;
+    }
+    int k = 30;
+    while (s.size() < k) {
+        auto u = q.top();
+        q.pop(); // pop u here, so we can update q properly if needed
+        if (u->flag == s.size()) {
+            s.push_back(u);
+            tev += u->mg1;
+            last_seed = u;
+            cur_best = nullptr;
+            std::cout << "k = " << s.size() << std::endl;
+            std::cout << "Total expected value: " << tev << std::endl;
+            std::cout << "Ids:" << std::endl;
+            for (const auto& n : s) {
+                std::cout << n->id << std::endl;
+            }
+            continue;
+        } else if (u->prev_best == last_seed && u->flag == s.size()-1) {
+            u->mg1 = u->mg2;
+            q.push(u);
+        } else {
+            u->mg1 = simulate(u, s, nodes);
+            u->prev_best = cur_best;
+            if (cur_best != nullptr) {
+                auto bs = s;
+                bs.push_back(cur_best);
+                u->mg2 = simulate(u, bs, nodes);
+            } else {
+                std::cout << "3" << std::endl;
+                u->mg2 = u->mg1;
+            }
+            q.push(u);
+        }
+        u->flag = s.size();
+        cur_best = q.top(); // double check this
+    }
 
     return 0;
 }
