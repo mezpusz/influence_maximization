@@ -3,8 +3,10 @@
 #include <vector>
 #include <cstdint>
 
+using node_id_t = uint32_t;
+
 struct node {
-    uint32_t id;
+    node_id_t id;
     std::vector<node*> neighbors;
     bool active = false;
     double mg1 = 0.0f;
