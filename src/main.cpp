@@ -1,16 +1,13 @@
 
+#include "inputparser.h"
+#include "node.h"
 #include "optionparser.h"
 
-#include <string>
-#include <vector>
-#include <fstream>
-#include <sstream>
-#include <cstdlib>
 #include <limits.h>
-#include <map>
 #include <deque>
 #include <iostream>
 #include <queue>
+#include <thread>
 
 #define SIM_COUNT 10000
 #define P 0.9f
@@ -20,14 +17,72 @@ inline double randp()
     return std::rand() / (RAND_MAX * 1.0f);
 }
 
-struct node {
-    uint32_t id;
-    std::vector<node*> neighbors;
-    bool active = false;
-    double mg1 = 0.0f;
-    double mg2 = 0.0f;
-    int flag = 0;
-    node* prev_best = nullptr;
+struct simulation_thread {
+    std::thread m_thread;
+    std::vector<node> m_nodes;
+
+    simulation_thread(std::map<uint32_t, std::vector<uint32_t>> ne_pairs)
+        : m_nodes(ne_pairs.size())
+    {
+        auto ne_it = ne_pairs.begin();
+        for (int i = 0; i < m_nodes.size(); i++) {
+            m_nodes[i].id = ne_it->first;
+            for (const auto& ne : ne_it->second) {
+                if (ne < m_nodes[i].id) { // neighbor is already in vector
+                    int j = 0;
+                    for (;j < m_nodes.size() && m_nodes[j].id < ne; j++);
+                    m_nodes[i].neighbors.push_back(&m_nodes[j]);
+                    m_nodes[j].neighbors.push_back(&m_nodes[i]);
+                }
+            }
+            ne_it++;
+        }
+    }
+
+    double simulate(node* u, std::vector<node*> s) {
+        uint64_t gain_sum = s.size();
+        for (int i = 0; i < SIM_COUNT; i++) {
+            for (auto& n : m_nodes) {
+                n.active = false;
+            }
+            auto cs = bfs(s);
+            if (!u->active) {
+                std::vector<node*> us;
+                us.push_back(u);
+                auto cu = bfs(us);
+                gain_sum += cu - cs;
+            }
+        }
+        return gain_sum / (SIM_COUNT * 1.0f);
+    }
+
+private:
+    int bfs(std::vector<node*> s) {
+        //std::cout << __FUNCTION__ << std::endl;
+        uint64_t covered_nodes = s.size();
+        std::deque<node*> q;
+        for (auto& n : s) {
+            n->active = true;
+            q.push_back(n);
+        }
+        while (!q.empty()) {
+            auto curr = q.front();
+            q.pop_front();
+
+            for (auto& n : curr->neighbors) {
+                if (n->active) {
+                    continue;
+                }
+                auto p = randp();
+                if (p >= P) {
+                    n->active = true;
+                    q.push_back(n);
+                    covered_nodes++;
+                }
+            }
+        }
+        return covered_nodes;
+    }
 };
 
 class marg_gain_compare {
@@ -38,106 +93,6 @@ public:
 };
 
 using marg_queue = std::priority_queue<node*, std::vector<node*>, marg_gain_compare>;
-
-std::map<uint32_t, std::vector<uint32_t>> parse(const std::string& filename) {
-    //std::cout << __FUNCTION__ << std::endl;
-    std::ifstream in(filename);
-    std::map<uint32_t, std::vector<uint32_t>> ne_pairs;
-
-    if (!in.is_open()) {
-        std::cout << "Cannot open input file " << filename << std::endl;
-        return ne_pairs;
-    }
-
-    std::string line;
-    while (std::getline(in, line)) {
-        if (line[0] == '#') {
-            continue;
-        }
-        std::istringstream is(line);
-        uint32_t from_id;
-        uint32_t to_id;
-        is >> from_id >> to_id;
-        auto from_it = ne_pairs.find(from_id);
-        auto to_it = ne_pairs.find(to_id);
-        if (from_it == ne_pairs.end()) {
-            from_it = ne_pairs.insert(make_pair(from_id, std::vector<uint32_t>())).first;
-        }
-        if (to_it == ne_pairs.end()) {
-            to_it = ne_pairs.insert(make_pair(to_id, std::vector<uint32_t>())).first;
-        }
-        from_it->second.push_back(to_id);
-        to_it->second.push_back(from_id);
-    }
-    return ne_pairs;
-}
-
-std::vector<node> create_nodes(std::map<uint32_t, std::vector<uint32_t>> ne_pairs) {
-    //std::cout << __FUNCTION__ << std::endl;
-    std::vector<node> nodes(ne_pairs.size());
-    auto ne_it = ne_pairs.begin();
-    for (int i = 0; i < nodes.size(); i++) {
-        nodes[i].id = ne_it->first;
-        //std::cout << "node " << nodes[i].id << std::endl;
-        for (const auto& ne : ne_it->second) {
-            //std::cout << ne << " ";
-            if (ne < nodes[i].id) { // neighbor is already in vector
-                int j = 0;
-                for (;j < nodes.size() && nodes[j].id < ne; j++);
-                nodes[i].neighbors.push_back(&nodes[j]);
-                nodes[j].neighbors.push_back(&nodes[i]);
-            }
-        }
-        //std::cout << std::endl;
-        ne_it++;
-    }
-    return nodes;
-}
-
-int bfs(std::vector<node*> s) {
-    //std::cout << __FUNCTION__ << std::endl;
-    uint64_t covered_nodes = s.size();
-    std::deque<node*> q;
-    for (auto& n : s) {
-        n->active = true;
-        q.push_back(n);
-    }
-    while (!q.empty()) {
-        auto curr = q.front();
-        q.pop_front();
-
-        for (auto& n : curr->neighbors) {
-            if (n->active) {
-                continue;
-            }
-            auto p = randp();
-            if (p >= P) {
-                n->active = true;
-                q.push_back(n);
-                covered_nodes++;
-            }
-        }
-    }
-    return covered_nodes;
-}
-
-double simulate(node* u, std::vector<node*> s, std::vector<node>& nodes) {
-    //std::cout << __FUNCTION__ << std::endl;
-    uint64_t gain_sum = s.size();
-    for (int i = 0; i < SIM_COUNT; i++) {
-        for (auto& n : nodes) {
-            n.active = false;
-        }
-        auto cs = bfs(s);
-        if (!u->active) {
-            std::vector<node*> us;
-            us.push_back(u);
-            auto cu = bfs(us);
-            gain_sum += cu - cs;
-        }
-    }
-    return gain_sum / (SIM_COUNT * 1.0f);
-}
 
 int main(int argc, char* argv[]) {
     std::srand(0);
@@ -152,7 +107,7 @@ int main(int argc, char* argv[]) {
     }
 
     auto ne_pairs = parse(infile_str);
-    auto nodes = create_nodes(ne_pairs);
+    simulation_thread t(ne_pairs);
 
     node* last_seed = nullptr;
     node* cur_best = nullptr;
@@ -160,13 +115,13 @@ int main(int argc, char* argv[]) {
     marg_queue q;
     double tev = 0.0f; // total expected value
     int i = 0;
-    for (auto& n : nodes) {
+    for (auto& n : t.m_nodes) {
         std::vector<node*> sn;
-        n.mg1 = simulate(&n, sn, nodes);
+        n.mg1 = t.simulate(&n, sn);
         n.prev_best = cur_best;
         if (cur_best != nullptr) {
             sn.push_back(cur_best);
-            n.mg2 = simulate(&n, sn, nodes);
+            n.mg2 = t.simulate(&n, sn);
         } else {
             n.mg2 = n.mg1;
         }
@@ -196,12 +151,12 @@ int main(int argc, char* argv[]) {
             u->mg1 = u->mg2;
             q.push(u);
         } else {
-            u->mg1 = simulate(u, s, nodes);
+            u->mg1 = t.simulate(u, s);
             u->prev_best = cur_best;
             if (cur_best != nullptr) {
                 auto bs = s;
                 bs.push_back(cur_best);
-                u->mg2 = simulate(u, bs, nodes);
+                u->mg2 = t.simulate(u, bs);
             } else {
                 std::cout << "3" << std::endl;
                 u->mg2 = u->mg1;
