@@ -8,15 +8,18 @@
 #include <iostream>
 #include <queue>
 #include <thread>
+#include <optional>
+#include <future>
 #include <unordered_map>
+#include <condition_variable>
 
 #define SIM_COUNT 10000
-#define THREAD_COUNT 1
+#define THREAD_COUNT std::thread::hardware_concurrency()
 #define P 0.9f
 
-inline double randp()
+inline double randp(unsigned int* seed)
 {
-    return std::rand() / (RAND_MAX * 1.0f);
+    return rand_r(seed) / (RAND_MAX * 1.0f);
 }
 
 std::vector<node> create_nodes(const neighbour_pair_map ne_pairs) {
@@ -37,91 +40,149 @@ std::vector<node> create_nodes(const neighbour_pair_map ne_pairs) {
     return nodes;
 }
 
+int bfs(unsigned int* seed, std::vector<node*> s) {
+    uint64_t covered_nodes = s.size();
+    std::deque<node*> q;
+    for (auto& n : s) {
+        n->active = true;
+        q.push_back(n);
+    }
+    while (!q.empty()) {
+        auto curr = q.front();
+        q.pop_front();
+
+        for (auto& n : curr->neighbors) {
+            if (n->active) {
+                continue;
+            }
+            auto p = randp(seed);
+            if (p >= P) {
+                n->active = true;
+                q.push_back(n);
+                covered_nodes++;
+            }
+        }
+    }
+    return covered_nodes;
+}
+
+double simulate(
+        std::vector<node>& nodes,
+        std::unordered_map<node_id_t, node*>& id_map,
+        node_id_t u_id, std::vector<node_id_t> s_id) {
+    std::vector<node*> s;
+    for (const auto& id : s_id) {
+        s.push_back(id_map[id]);
+    }
+    node* u = id_map[u_id];
+    uint64_t gain_sum = s.size();
+    auto count = SIM_COUNT/THREAD_COUNT;
+    unsigned int seed(time(0));
+    for (int i = 0; i < count; i++) {
+        for (auto& n : nodes) {
+            n.active = false;
+        }
+        auto cs = bfs(&seed, s);
+        if (!u->active) {
+            std::vector<node*> us;
+            us.push_back(u);
+            auto cu = bfs(&seed, us);
+            gain_sum += cu - cs;
+        }
+    }
+    return gain_sum;
+}
 
 struct simulation_thread {
     std::thread m_thread;
-    std::vector<node> m_nodes;
-    std::unordered_map<node_id_t, node*> m_id_map;
+    std::optional<std::pair<node_id_t, std::vector<node_id_t>>> m_job;
+    std::condition_variable cond;
+    std::mutex lock;
+    std::atomic<bool> m_running;
+    std::promise<double> m_result;
 
-    simulation_thread(const neighbour_pair_map ne_pairs)
-        : m_nodes(create_nodes(ne_pairs))
+    simulation_thread(const neighbour_pair_map ne_pairs, bool create_thread)
+        : m_thread()
+        , m_job()
+        , m_running(create_thread)
     {
-        for (int i = 0; i < m_nodes.size(); i++) {
-            m_id_map.insert(std::make_pair(m_nodes[i].id, &m_nodes[i]));
+        if (create_thread) {
+            m_thread = std::thread([this, ne_pairs = std::as_const(ne_pairs)](){
+                std::vector<node> nodes = create_nodes(ne_pairs);
+                std::unordered_map<node_id_t, node*> id_map;
+                for (int i = 0; i < nodes.size(); i++) {
+                    id_map.insert(std::make_pair(nodes[i].id, &nodes[i]));
+                }
+
+                while (true) {
+                    node_id_t u_id;
+                    std::vector<node_id_t> s_id;
+                    {
+                        std::unique_lock<std::mutex> l(lock);
+                        if (m_running && !m_job.has_value()) {
+                            cond.wait(l);
+                        }
+                        if (!m_job.has_value()) {
+                            return;
+                        }
+                        u_id = m_job.value().first;
+                        s_id = m_job.value().second;
+                        m_job.reset();
+                    }
+                    auto res = simulate(nodes, id_map, u_id, s_id);
+                    m_result.set_value(res);
+                }
+            });
         }
     }
 
-    double simulate(node_id_t u_id, std::vector<node_id_t> s_id) {
-        std::vector<node*> s;
-        for (const auto& id : s_id) {
-            s.push_back(m_id_map[id]);
+    ~simulation_thread() {
+        m_running = false;
+        cond.notify_all();
+        if (m_thread.joinable()) {
+            m_thread.join();
         }
-        node* u = m_id_map[u_id];
-        uint64_t gain_sum = s.size();
-        for (int i = 0; i < SIM_COUNT; i++) {
-            for (auto& n : m_nodes) {
-                n.active = false;
-            }
-            auto cs = bfs(s);
-            if (!u->active) {
-                std::vector<node*> us;
-                us.push_back(u);
-                auto cu = bfs(us);
-                gain_sum += cu - cs;
-            }
-        }
-        return gain_sum / (SIM_COUNT * 1.0f);
     }
 
-private:
-    int bfs(std::vector<node*> s) {
-        //std::cout << __FUNCTION__ << std::endl;
-        uint64_t covered_nodes = s.size();
-        std::deque<node*> q;
-        for (auto& n : s) {
-            n->active = true;
-            q.push_back(n);
+    std::future<double> add_job(node_id_t u_id, std::vector<node_id_t> s_id) {
+        m_result = std::promise<double>();
+        {
+            std::lock_guard<std::mutex> l(lock);
+            m_job = std::make_optional(std::make_pair(u_id, s_id));
         }
-        while (!q.empty()) {
-            auto curr = q.front();
-            q.pop_front();
-
-            for (auto& n : curr->neighbors) {
-                if (n->active) {
-                    continue;
-                }
-                auto p = randp();
-                if (p >= P) {
-                    n->active = true;
-                    q.push_back(n);
-                    covered_nodes++;
-                }
-            }
-        }
-        return covered_nodes;
+        cond.notify_one();
+        return m_result.get_future();
     }
 };
 
 struct simulation_pool {
-    std::vector<simulation_thread> threads;
-    std::deque<simulation_thread*> active_queue;
+    std::vector<simulation_thread*> threads;
 
     simulation_pool(neighbour_pair_map ne_pairs)
         : threads()
-        , active_queue()
     {
+        threads.reserve(THREAD_COUNT);
         for (int i = 0; i < THREAD_COUNT; i++) {
-            threads.push_back(simulation_thread(ne_pairs));
-            active_queue.push_back(&threads[i]);
+            threads.push_back(new simulation_thread(ne_pairs, true));
+        }
+    }
+
+    ~simulation_pool() {
+        for (int i = 0; i < THREAD_COUNT; i++) {
+            delete threads[i];
         }
     }
 
     double simulate(node_id_t u_id, std::vector<node_id_t> s_id) {
-        auto t = active_queue.front();
-        active_queue.pop_front();
-        auto gain = t->simulate(u_id, s_id);
-        active_queue.push_back(t);
-        return gain;
+        std::vector<std::future<double>> fs;
+        double gain = 0.0f;
+        for (int i = 0; i < THREAD_COUNT; i++) {
+            fs.push_back(threads[i]->add_job(u_id, s_id));
+        }
+        for (auto& f : fs) {
+            gain += f.get();
+        }
+        return gain/SIM_COUNT;
     }
 };
 
@@ -135,7 +196,6 @@ public:
 using marg_queue = std::priority_queue<node*, std::vector<node*>, marg_gain_compare>;
 
 int main(int argc, char* argv[]) {
-    std::srand(0);
     OptionParser opt(argc, argv);
     std::string it_str, infile_str, outfile_str;
     //size_t iter = opt.GetOption("--it", it_str) ? stoi(it_str) : 1;
@@ -166,16 +226,15 @@ int main(int argc, char* argv[]) {
         } else {
             n.mg2 = n.mg1;
         }
+        std::cout << ++i << " nodes ready " << n.id << " " << n.mg1 << " " << n.mg2 << std::endl;
         q.push(&n);
         if (cur_best == nullptr || n.mg1 > cur_best->mg1) {
             cur_best = &n;
         }
-        std::cout << ++i << " nodes ready" << std::endl;
-        if (i == 10) {
+        if (i == 60) {
             break;
         }
     }
-    return 0;
     int k = 30;
     while (s.size() < k) {
         auto u = q.top();

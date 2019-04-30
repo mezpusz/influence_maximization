@@ -8,3 +8,5 @@ add_executable(inflmax inputparser.cpp
                        optionparser.h
                     )
 include_directories("${PROJECT_SOURCE_DIR}")
+find_package(Threads)
+target_link_libraries(inflmax ${CMAKE_THREAD_LIBS_INIT})
