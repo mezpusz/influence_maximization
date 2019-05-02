@@ -6,6 +6,10 @@ add_executable(inflmax inputparser.cpp
                        node.h
                        optionparser.cpp
                        optionparser.h
+                       simulator.cpp
+                       simulator.h
+                       simulator_thread.cpp
+                       simulator_thread.h
                     )
 include_directories("${PROJECT_SOURCE_DIR}")
 find_package(Threads)

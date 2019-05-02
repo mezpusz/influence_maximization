@@ -8,3 +8,4 @@
 using neighbour_pair_map = std::map<node_id_t, std::vector<node_id_t>>;
 
 neighbour_pair_map parse(const std::string& filename);
+std::vector<node> create_nodes(const neighbour_pair_map ne_pairs);
