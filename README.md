@@ -1,5 +1,5 @@
-Multi-threaded implementation of the (Influence Maximization Problem)[https://www.cs.cornell.edu/home/kleinber/kdd03-inf.pdf],
-using the independent cascade model and based on the greedy lazy-evaluation CELF++ algorithm of (this paper)[http://snap.stanford.edu/class/cs224w-readings/goyal11celf.pdf].
+Multi-threaded implementation of the [Influence Maximization Problem](https://www.cs.cornell.edu/home/kleinber/kdd03-inf.pdf),
+using the independent cascade model and based on the greedy lazy-evaluation CELF++ algorithm of [this paper](http://snap.stanford.edu/class/cs224w-readings/goyal11celf.pdf).
 
 ## Requirements for Unix
 
