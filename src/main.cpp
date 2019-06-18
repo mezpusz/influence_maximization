@@ -17,6 +17,7 @@ public:
 
 using marg_queue = std::priority_queue<node*, std::vector<node*>, marg_gain_compare>;
 
+// This method is just for control but not yet working
 std::map<node_id_t, double> maximize_influence_max_degree(
         const neighbour_pair_map& ne_pairs,
         size_t iter,
@@ -74,6 +75,7 @@ std::map<node_id_t, double> maximize_influence_max_degree(
     return res;
 }
 
+// This method implements the CELF++ version
 std::map<node_id_t, double> maximize_influence(
         const neighbour_pair_map& ne_pairs,
         size_t iter,
@@ -92,14 +94,19 @@ std::map<node_id_t, double> maximize_influence(
     int i = 0;
     std::cout << "Initializing nodes..." << std::endl;
     for (auto& n : nodes) {
+        // This vector is just a placeholder here because
+        // we don't have any nodes already added to the result 
         std::vector<node_id_t> sn;
+        // b_id means the current best in the whole project
         auto b_id = (cur_best == nullptr)
             ? NULL_NODE_ID
             : cur_best->id;
+        // The simulation is run for the already added set,
+        // with the current best and without a current best also
         auto pair = pool.run(n.id, b_id, sn);
-        n.mg1 = pair.first;
+        n.mg1 = pair.first; // First contains run without current best
         n.prev_best = cur_best;
-        n.mg2 = pair.second;
+        n.mg2 = pair.second; // Second contains run with current best
         std::cout << ++i << " nodes ready " << n.id << " " << n.mg1 << " " << n.mg2 << std::endl;
         q.push(&n);
         if (cur_best == nullptr || n.mg1 > cur_best->mg1) {
@@ -163,7 +170,7 @@ int main(int argc, char* argv[]) {
         p = 0.1f;
     }
     if (!opt.GetOption("-i", infile_str)) {
-        infile_str = "CA-HepTh.txt";
+        infile_str = "facebook/0.edges";
     }
     if (!opt.GetOption("-o", outfile_str)) {
         outfile_str = "output.txt";
